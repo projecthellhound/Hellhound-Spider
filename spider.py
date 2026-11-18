@@ -61,7 +61,7 @@ except Exception:
           
                                                                         
 
-VERSION      = "14.2"
+VERSION      = "14.5"
 __author__   = "Sree Danush S (L4ZZ3RJ0D)"
 __license__  = "GPLv3"
 __credits__  = ["L4ZZ3RJ0D"]
@@ -365,6 +365,13 @@ class Emit:
 
     def always_info(self, msg: str):
         self._w(f"{C.CY}[*]{C.RST} {msg}")
+
+    def tagged(self, tag: str, color: str, msg: str):
+        # Always-shown (never gated behind --verbose), with a color of its
+        # own rather than the generic [*] info marker — so finding types
+        # that would otherwise look identical in the live feed (CAPTCHA,
+        # JWT, reflected params, ...) are each visually distinct at a glance.
+        self._w(f"{color}[{tag}]{C.RST} {msg}")
 
     @staticmethod
     def trunc_url(url: str, maxlen: int = 65) -> str:
@@ -837,7 +844,122 @@ def print_results(intel: dict, target: str, elapsed: float,
                 pill = f"{sev_col}{C.B} {sev} {C.RST}"
                 print(f"  {pill}  {C.W}{f.get('issue','')}{C.RST}  {C.GR}{f.get('detail','')}{C.RST}")
 
-                                                                        
+
+    # ── AUTH / OAUTH / SSO / CAPTCHA / LOGIN — "summary is what most
+    # hackers actually read" per explicit design intent, so all of this
+    # surfaces here, not just in the live feed. ────────────────────────
+    login_result    = intel.get("login_result")
+    oauth_findings  = intel.get("oauth_findings", [])
+    captcha_findings = intel.get("captcha_findings", [])
+
+    if login_result is not None:
+        ok = login_result.get("ok")
+        emit.section("LOGIN AUTOMATION", orbital=True)
+        if nc:
+            print(f"  [{'OK' if ok else 'FAILED'}] " + (
+                f"Authenticated — cookies set: {', '.join(login_result.get('cookies_set', []))}"
+                if ok else f"Not authenticated — {login_result.get('reason','unknown reason')}"))
+        else:
+            if ok:
+                print(f"  {C.G}●{C.RST} {C.G}Authenticated{C.RST}  "
+                      f"{C.W}cookies set: {', '.join(login_result.get('cookies_set', []))}{C.RST}")
+            else:
+                print(f"  {C.R}●{C.RST} {C.R}Not authenticated{C.RST}  "
+                      f"{C.GR}{login_result.get('reason','unknown reason')}{C.RST}")
+
+    if oauth_findings:
+        emit.section(f"OAUTH / SSO DETECTION  ({len(oauth_findings)} redirect(s) fingerprinted)", orbital=True)
+        if not nc:
+            emit.row("Note", "Detected during unauthenticated recon — fingerprinting only, "
+                              "Spider never follows or automates the OAuth flow itself",
+                     icon="○", label_colour=C.CY, value_colour=C.W)
+        for f in sorted(oauth_findings, key=lambda f: f.get("provider","")):
+            provider = f.get("provider","Unknown")
+            trig     = f.get("trigger_url","")
+            authz    = f.get("authorize_url","")
+            params   = f.get("params", {})
+            gaps = []
+            if not f.get("has_pkce"):  gaps.append("no PKCE")
+            if not f.get("has_state"): gaps.append("no state param")
+            gap_str = f"  [{', '.join(gaps)}]" if gaps else ""
+            if nc:
+                print(f"  ● {provider:<28} {trig}  ->  {authz}{gap_str}")
+                if params:
+                    print(f"       params: {params}")
+            else:
+                gap_col = C.R if gaps else C.G
+                print(f"  {C.MG}●{C.RST} {C.W}{provider:<28}{C.RST} {C.CYD}{trig}{C.RST}")
+                print(f"  {C.GR}     └─ authorize:{C.RST} {C.Y}{authz}{C.RST}{f'  {gap_col}{gap_str}{C.RST}' if gap_str else ''}")
+                if params:
+                    pstr = ", ".join(f"{k}={v}" for k, v in params.items())
+                    print(f"  {C.GR}        params: {pstr}{C.RST}")
+
+    if captcha_findings:
+        emit.section(f"CAPTCHA DETECTION  ({len(captcha_findings)} found)", orbital=True)
+        if not nc:
+            emit.row("Note", "Detect-and-report only — Spider never attempts to solve a CAPTCHA",
+                     icon="○", label_colour=C.CY, value_colour=C.W)
+        for f in sorted(captcha_findings, key=lambda f: f.get("url","")):
+            if nc:
+                print(f"  ● {f.get('type',''):<28} {f.get('url','')}")
+            else:
+                print(f"  {C.Y}●{C.RST} {C.W}{f.get('type',''):<28}{C.RST} {C.CYD}{f.get('url','')}{C.RST}")
+
+    reflected_params = intel.get("reflected_params", [])
+    if reflected_params:
+        emit.section(f"REFLECTED PARAMETERS  ({len(reflected_params)} candidate(s))", orbital=True)
+        if not nc:
+            emit.row("Note", "Passive observation — the param's own value came back verbatim in the "
+                              "response. A lead for reflected XSS/template injection, not a confirmed "
+                              "one; verify manually with an actual payload",
+                     icon="○", label_colour=C.CY, value_colour=C.W)
+        for f in sorted(reflected_params, key=lambda f: f.get("url","")):
+            if nc:
+                print(f"  ● {f.get('param',''):<20} {f.get('url','')}")
+            else:
+                print(f"  {C.MG}●{C.RST} {C.W}{f.get('param',''):<20}{C.RST} {C.CYD}{f.get('url','')}{C.RST}")
+
+    jwt_findings = intel.get("jwt_findings", [])
+    if jwt_findings:
+        emit.section(f"JWT INSPECTION  ({len(jwt_findings)} token(s) decoded)", orbital=True)
+        if not nc:
+            emit.row("Note", "Structural decode only — no signature verification, forging, or "
+                              "cracking attempted",
+                     icon="○", label_colour=C.CY, value_colour=C.W)
+        for f in sorted(jwt_findings, key=lambda f: f.get("url","")):
+            issues = f.get("issues", [])
+            if nc:
+                print(f"  ● alg={f.get('alg','?'):<8} {f.get('url','')}  [{f.get('token_preview','')}]")
+                for iss in issues:
+                    print(f"       - {iss}")
+            else:
+                sev_col = C.R if issues else C.G
+                print(f"  {sev_col}●{C.RST} {C.W}alg={f.get('alg','?'):<8}{C.RST} {C.CYD}{f.get('url','')}{C.RST}  "
+                      f"{C.GR}[{f.get('token_preview','')}]{C.RST}")
+                for iss in issues:
+                    print(f"  {C.GR}     └─ {C.Y}{iss}{C.RST}")
+
+    api_diff = intel.get("api_spec_diff")
+    if api_diff:
+        dnr = api_diff.get("documented_not_reached", [])
+        shadow = api_diff.get("shadow_undocumented", [])
+        emit.section(f"API SPEC DIFF  ({len(dnr)} unreached · {len(shadow)} shadow)", orbital=True)
+        if dnr:
+            if not nc:
+                emit.row("Documented, never reached", "In the OpenAPI/Swagger spec but nothing ever "
+                                                        "got a response — deprecated, access-restricted, "
+                                                        "or just unlinked from the UI",
+                         icon="○", label_colour=C.CY, value_colour=C.W)
+            for u in dnr:
+                print(f"  {C.Y}●{C.RST} {C.W}{u}{C.RST}" if not nc else f"  ● {u}")
+        if shadow:
+            if not nc:
+                emit.row("Reached, not documented", "API-shaped endpoints the crawl actually hit that "
+                                                      "the spec never mentions — shadow attack surface",
+                         icon="○", label_colour=C.CY, value_colour=C.W)
+            for u in shadow:
+                print(f"  {C.R}●{C.RST} {C.W}{u}{C.RST}" if not nc else f"  ● {u}")
+
     crt_subs = intel.get("crt_subdomains", [])
     if crt_subs:
         emit.section(f"CRT.SH SUBDOMAINS  ({len(crt_subs)} discovered)", orbital=True)
@@ -1699,7 +1821,20 @@ class Config:
         # default; disable with --no-backtrack.
         self.enable_backtrack   = kw.get("enable_backtrack",   True)
         self.ctf_flag_templates = kw.get("ctf_flag_templates", [])
-                                                                
+        # Classic HTML username/password form-login automation. Off unless
+        # --login is given. OAuth/SSO redirect detection and CAPTCHA
+        # detection run as part of it, and also run independently during
+        # ordinary unauthenticated recon regardless of this flag.
+        self.login_url  = kw.get("login_url",  None)
+        self.login_user = kw.get("login_user", None)
+        self.login_pass = kw.get("login_pass", None)
+        # Scan resume/checkpointing. --checkpoint writes periodic + final
+        # progress snapshots to a file; --resume loads one back in before
+        # recon starts, so already-visited URLs and all findings survive
+        # an interrupted or crashed run instead of re-crawling from zero.
+        self.resume_file     = kw.get("resume_file",     None)
+        self.checkpoint_file = kw.get("checkpoint_file", None)
+
         self.extra_scope: frozenset = frozenset(kw.get("extra_scope", []))
         self.user_agent = kw.get(
             "user_agent",
@@ -1714,6 +1849,10 @@ class Config:
             raise ValueError("concurrency must be 1–100")
         if self.max_runtime is not None and self.max_runtime < 0:
             raise ValueError("max_runtime must be >= 0 (0 disables the cap)")
+        if self.login_url and not (self.login_user and self.login_pass):
+            raise ValueError("--login requires both --login-user and --login-pass")
+        if (self.login_user or self.login_pass) and not self.login_url:
+            raise ValueError("--login-user/--login-pass require --login <url>")
 
                                                                         
                           
@@ -1903,9 +2042,232 @@ async def fetch_with_redirect(session, method, url, rl, max_retries=3, base_dela
                 await asyncio.sleep(base_delay * (2**attempt))
     return None, None, None, url
 
-                                                                        
-               
-                                                                        
+
+async def fetch_no_redirect(session, method, url, rl, max_retries=2, base_delay=0.5, **kw):
+    """Like fetch(), but never follows redirects — returns the raw Location
+    header too. Used for OAuth/SSO redirect fingerprinting, where the whole
+    point is to see where the target *would* have sent the browser, not to
+    follow it there."""
+    domain = urlparse(url).netloc
+    await rl.wait(domain)
+    for attempt in range(max_retries + 1):
+        try:
+            async with session.request(method, url, ssl=False,
+                                       allow_redirects=False, **kw) as resp:
+                if resp.status == 429:
+                    rl.backoff(domain)
+                    await asyncio.sleep(float(resp.headers.get("Retry-After", base_delay * (2**attempt))))
+                    continue
+                body = ""
+                try:
+                    body = await resp.text(errors="replace")
+                except Exception:
+                    body = ""
+                rl.recover(domain)
+                return resp.status, dict(resp.headers), body, resp.headers.get("Location", "")
+        except Exception:
+            if attempt < max_retries:
+                await asyncio.sleep(base_delay * (2**attempt))
+    return None, None, "", ""
+
+
+# ── CAPTCHA detection (detect-and-report only — Spider never attempts to
+# solve or bypass a CAPTCHA) ─────────────────────────────────────────────
+_CAPTCHA_SIGNATURES = (
+    (re.compile(r'g-recaptcha|recaptcha/api\.js|grecaptcha\.render|www\.google\.com/recaptcha', re.I), "reCAPTCHA (Google)"),
+    (re.compile(r'h-captcha|hcaptcha\.com/1/api\.js', re.I), "hCaptcha"),
+    (re.compile(r'cf-turnstile|challenges\.cloudflare\.com/turnstile', re.I), "Cloudflare Turnstile"),
+    (re.compile(r'arkoselabs|funcaptcha|fc-token', re.I), "Arkose Labs / FunCaptcha"),
+    (re.compile(r'captcha', re.I), "Generic/Unidentified CAPTCHA"),
+)
+
+def detect_captcha(body: Optional[str]) -> Optional[str]:
+    """Return a human-readable CAPTCHA provider name if the response body
+    carries a recognizable CAPTCHA widget marker, else None. Detection only."""
+    if not body:
+        return None
+    for pattern, name in _CAPTCHA_SIGNATURES:
+        if pattern.search(body):
+            return name
+    return None
+
+
+# ── OAuth / SSO redirect fingerprinting (detect-and-report only — Spider
+# never attempts to automate or bypass the actual OAuth/OIDC flow) ───────
+_OAUTH_LOGIN_TRIGGER_PATHS = (
+    "/login", "/signin", "/sign-in", "/log-in", "/account/login",
+    "/user/login", "/auth", "/auth/login", "/authorize", "/authenticate",
+    "/sso", "/sso/login", "/oauth", "/oauth2", "/connect/authorize",
+    "/dashboard", "/account", "/admin",
+)
+
+_OAUTH_PROVIDER_SIGS = (
+    (re.compile(r'\.okta\.com|\.oktapreview\.com|\.okta-emea\.com', re.I), "Okta"),
+    (re.compile(r'login\.microsoftonline\.com|\.b2clogin\.com|login\.windows\.net|login\.live\.com', re.I), "Microsoft Entra ID / Azure AD"),
+    (re.compile(r'accounts\.google\.com', re.I), "Google"),
+    (re.compile(r'\.auth0\.com', re.I), "Auth0"),
+    (re.compile(r'\.onelogin\.com', re.I), "OneLogin"),
+    (re.compile(r'\.pingone\.com|\.pingidentity\.com', re.I), "Ping Identity"),
+    (re.compile(r'cognito-idp\.[\w-]+\.amazonaws\.com|\.auth\.[\w-]+\.amazoncognito\.com', re.I), "AWS Cognito"),
+    (re.compile(r'/realms/[^/]+/protocol/openid-connect', re.I), "Keycloak"),
+    (re.compile(r'github\.com/login/oauth', re.I), "GitHub OAuth"),
+    (re.compile(r'(?:www\.)?facebook\.com/.*dialog/oauth', re.I), "Facebook OAuth"),
+    (re.compile(r'appleid\.apple\.com', re.I), "Sign in with Apple"),
+    (re.compile(r'\.frontegg\.com', re.I), "Frontegg"),
+)
+
+# Shape of an OAuth2/OIDC authorization request — a query string carrying
+# client_id/response_type, or a path that looks like an /authorize endpoint.
+_OAUTH_QS_SHAPE_RE   = re.compile(r'[?&](client_id|response_type)=', re.I)
+_OAUTH_PATH_SHAPE_RE = re.compile(r'/(?:oauth2?/)?(?:authorize|auth)(?:[/?]|$)|/connect/authorize|/protocol/openid-connect/auth', re.I)
+
+_OAUTH_PARAM_KEYS = (
+    "client_id", "redirect_uri", "response_type", "scope", "state",
+    "code_challenge", "code_challenge_method", "nonce", "response_mode",
+)
+
+def classify_oauth_redirect(location: str) -> Optional[dict]:
+    """Given an absolute URL a target redirected to, decide whether it looks
+    like a third-party OAuth2/OIDC authorization request and, if so, which
+    provider it is. Returns None for anything that doesn't look OAuth-shaped
+    (e.g. a plain same-site redirect to another page). This is pure
+    fingerprinting — it never follows the URL or attempts the flow."""
+    if not location:
+        return None
+    looks_oauth = bool(_OAUTH_QS_SHAPE_RE.search(location)) or bool(_OAUTH_PATH_SHAPE_RE.search(location))
+    if not looks_oauth:
+        return None
+    provider = "Generic OAuth2/OIDC"
+    for pattern, name in _OAUTH_PROVIDER_SIGS:
+        if pattern.search(location):
+            provider = name
+            break
+    parsed = urlparse(location)
+    qs = parse_qs(parsed.query)
+    params = {k: qs[k][0] for k in _OAUTH_PARAM_KEYS if k in qs}
+    return {
+        "provider":      provider,
+        "authorize_url": location,
+        "params":        params,
+        "has_pkce":      "code_challenge" in params,
+        "has_state":     "state" in params,
+    }
+
+
+# A login page redirecting instantly is only one way OAuth/SSO shows up. The
+# much more common real-world shape is a classic username/password form
+# sitting right alongside a visible "Continue with SSO" / "Sign in with
+# Google" button or link — the page itself returns 200, so a plain
+# redirect-shaped probe never sees it. This scans the page HTML for that
+# button/link instead of relying on an immediate redirect.
+_SSO_LINK_TEXT_RE = re.compile(
+    r'\bsso\b|single sign-?on|continue with|sign in with|log ?in with|'
+    r'\bsaml\b|\bokta\b|\bazure ?ad\b|\bentra\b|\bauth0\b|\bonelogin\b|identity provider',
+    re.I
+)
+_SSO_LINK_HREF_RE = re.compile(
+    r'/sso|/saml|/oauth2?/|/openid|/idp|/authorize|okta|auth0|onelogin|'
+    r'pingfederate|pingone|cognito|keycloak|azure|entra|microsoftonline',
+    re.I
+)
+
+def find_sso_links(body: Optional[str], base_url: str) -> list:
+    """Scan a page's HTML for a visible SSO/third-party-login control —
+    a link or button whose text or href suggests "sign in with <provider>"
+    or a generic SSO/SAML/OIDC hop — the pattern a fixed-path redirect probe
+    alone will never see when the page itself renders 200 with a classic
+    form AND an SSO option side by side. Returns a list of
+    (label, absolute_url_or_None) pairs, deduplicated; absolute_url is None
+    for a JS-driven control with no inspectable href. Detection only — never
+    follows or automates the control itself beyond one read-only hop
+    elsewhere."""
+    if not body:
+        return []
+    try:
+        soup = BeautifulSoup(body, "lxml")
+    except Exception:
+        return []
+    seen = set()
+    out = []
+    for el in soup.find_all(["a", "button"]):
+        href = (el.get("href") or el.get("data-href") or el.get("formaction") or "").strip()
+        text = el.get_text(" ", strip=True) or el.get("aria-label", "") or el.get("title", "") or ""
+        if not (_SSO_LINK_TEXT_RE.search(text) or (href and _SSO_LINK_HREF_RE.search(href))):
+            continue
+        label = text or "SSO option"
+        if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+            key = ("js", label)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((label, None))
+            continue
+        abs_url = urljoin(base_url, href)
+        key = ("url", abs_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((label, abs_url))
+    return out
+
+
+# ── JWT structural inspection (never verifies, forges, or cracks a
+# signature — purely decodes the public header/payload and flags
+# structural weaknesses an attacker would look for) ──────────────────────
+_JWT_RE = re.compile(
+    r'(?<![A-Za-z0-9_\-])eyJ[A-Za-z0-9_\-]{2,}?\.eyJ[A-Za-z0-9_\-]{2,}?\.[A-Za-z0-9_\-]*(?![A-Za-z0-9_\-])'
+)
+_JWT_PRIV_CLAIM_RE = re.compile(r'admin|superuser|root|is_?admin|elevated|god.?mode|impersonat', re.I)
+
+def _b64url_decode_json(segment: str) -> Optional[dict]:
+    try:
+        padded = segment + "=" * (-len(segment) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii", errors="ignore"))
+        obj = json.loads(raw.decode("utf-8", errors="replace"))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+def inspect_jwt(token: str) -> Optional[dict]:
+    """Decode a JWT's header and payload — no signature verification, no
+    cracking, no forging — and flag structural weaknesses: alg:none (lets an
+    attacker forge a token the server will still accept), HMAC algorithms
+    (susceptible to alg-confusion/secret-brute-forcing, worth a manual
+    check), missing exp/iat, and claims whose name or value suggests
+    elevated privilege (worth checking whether they're attacker-
+    controllable upstream, e.g. via a mass-assignment bug on registration).
+    Returns None if the string doesn't actually decode as a JWT."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    header, payload = _b64url_decode_json(parts[0]), _b64url_decode_json(parts[1])
+    if header is None or payload is None:
+        return None
+    alg = str(header.get("alg", "")).upper()
+    issues = []
+    if alg in ("NONE", ""):
+        issues.append('alg is "none" — signature verification can be bypassed entirely')
+    elif alg.startswith("HS"):
+        issues.append(f"HMAC-signed ({alg}) — check for alg-confusion (server also accepting "
+                       f"RS/ES tokens) and for a brute-forceable signing secret")
+    if "exp" not in payload:
+        issues.append('no "exp" claim — token never expires')
+    if "iat" not in payload and "nbf" not in payload:
+        issues.append('no "iat"/"nbf" claim')
+    priv_claims = sorted({
+        k for k, v in payload.items()
+        if _JWT_PRIV_CLAIM_RE.search(str(k)) or (isinstance(v, str) and _JWT_PRIV_CLAIM_RE.search(v))
+    })
+    if priv_claims:
+        issues.append(f"elevated-privilege-looking claim(s): {', '.join(priv_claims)} — "
+                       f"worth checking whether attacker-controllable upstream")
+    return {
+        "alg":    header.get("alg"),
+        "claims": {k: v for k, v in payload.items()
+                   if k in ("iss", "aud", "sub", "scope", "role", "exp", "iat") or k in priv_claims},
+        "issues": issues,
+    }
+
 
 _ID_RE = re.compile(
     r'^(?:\d{1,20}'
@@ -2165,6 +2527,30 @@ class Store:
         self.cloud_probes:       List[dict] = []
         self.page_bg_requests:   Dict[str, List[dict]] = defaultdict(list)
         self._bg_req_seen:       Set[tuple] = set()
+        # OAuth/SSO redirect fingerprints found during unauthenticated recon,
+        # CAPTCHA widget markers found on any probed page, and the outcome
+        # (if any) of --login form-login automation. All detect/report —
+        # nothing here is ever acted on automatically.
+        self.oauth_findings:  List[dict] = []
+        self._oauth_seen:     Set[str]   = set()
+        self.captcha_findings: List[dict] = []
+        self._captcha_seen:    Set[str]   = set()
+        self.login_result:    Optional[dict] = None
+        # Reflected-parameter candidates: a query-param value this crawl
+        # sent came back verbatim in the response body. Passive observation
+        # only — not a confirmed XSS/injection, just a lead worth a manual
+        # payload check. Sits alongside (not instead of) the numeric-ID/
+        # object-reference clustering already done for IDOR-style leads.
+        self.reflected_params:  List[dict] = []
+        self._reflected_seen:   Set[tuple] = set()
+        # JWT structural-weakness findings (alg:none, missing exp, elevated-
+        # privilege-looking claims, etc.) — decode-only, never signature
+        # verification/forging/cracking.
+        self.jwt_findings: List[dict] = []
+        self._jwt_seen:    Set[str]   = set()
+        # API spec diffing: populated once the crawl finishes, if an
+        # OpenAPI/Swagger spec was found.
+        self.api_spec_diff: Optional[dict] = None
 
     def record_bg_request(self, page_url: str, bg_url: str, method: str = "GET", source: str = "DeepSPA"):
         if not page_url or not bg_url:
@@ -2205,6 +2591,7 @@ class Store:
             "screenshot":           None,
             "dynamic_value_required": False,
             "dynamic_value_note":      "",
+            "reflected_params":       [],
         }
 
                                                                         
@@ -2665,6 +3052,7 @@ class Store:
             if ep.get("unauthenticated_api"):   score += 18
             if ep.get("sensitive_data_source"): score += 16
             if ep.get("legacy_endpoint"):       score += 12
+            if ep.get("reflected_params"):      score += 14
             if conf == "CONFIRMED":             score += 10
             if ep.get("auth_required"):         score += 5
             score += min(len(all_params) * 3, 15)
@@ -2688,6 +3076,7 @@ class Store:
                 "sensitive_signals":     ep.get("sensitive_signals", []),
                 "legacy_endpoint":       ep.get("legacy_endpoint", False),
                 "legacy_reason":         ep.get("legacy_reason", ""),
+                "reflected_params":      ep.get("reflected_params", []),
                 "priority_score":        score,
                 "source":                ep.get("source", []),
             })
@@ -2817,6 +3206,7 @@ class Store:
                                                                                      
                 "legacy_endpoint":  e.get("legacy_endpoint", False),
                 "legacy_reason":    e.get("legacy_reason", ""),
+                "reflected_params": e.get("reflected_params", []),
                 "dynamic_value_required": e.get("dynamic_value_required", False),
                 "dynamic_value_note":      e.get("dynamic_value_note", ""),
             })
@@ -2853,6 +3243,12 @@ class Store:
             "js_libs":           self.js_libs,
             "cloud_probes":      self.cloud_probes,
             "spa_background_requests": dict(self.page_bg_requests),
+            "oauth_findings":    self.oauth_findings,
+            "captcha_findings":  self.captcha_findings,
+            "login_result":      self.login_result,
+            "reflected_params":  self.reflected_params,
+            "jwt_findings":      self.jwt_findings,
+            "api_spec_diff":     self.api_spec_diff,
 
                                                                              
                                                                                
@@ -4369,7 +4765,7 @@ _OAS_PATHS = [
     "/.well-known/openapi","/api/swagger.json",
 ]
 
-async def probe_openapi(session, base, store, emit, rl):
+async def probe_openapi(session, base, store, emit, rl, queue=None):
     for path in _OAS_PATHS:
         url = urljoin(base, path)
         s, _, text = await fetch(session, "GET", url, rl)
@@ -4404,6 +4800,12 @@ async def probe_openapi(session, base, store, emit, rl):
                                    params=params+bp, score=Conf.CONFIRMED)
                 emit.info(f"[OpenAPI] {method.upper()} {full} ({len(params+bp)} params)")
                 count += 1
+                # Queue documented GET endpoints so the crawl actually
+                # verifies which of them are live/reachable — a spec can
+                # (and often does) document endpoints the UI never links
+                # to, so without this they'd sit registered but unverified.
+                if queue is not None and method.lower() == "get":
+                    queue.put_nowait((full, 1, "OpenAPI"))
         emit.always_success(f"[OpenAPI] Mapped {count} endpoints from spec")
         return
 
@@ -6659,6 +7061,7 @@ class DNSIntel:
         self.store  = store
         self.emit   = emit
         self._domain = urlparse(target).hostname or ""
+        self._takeover_seen: Set[tuple] = set()
 
     async def run(self):
         if not self._domain:
@@ -6721,17 +7124,73 @@ class DNSIntel:
                 cname_target = str(ans[0].target).rstrip(".")
                 for svc_frag, svc_name in self._TAKEOVER_SERVICES.items():
                     if svc_frag in cname_target:
-                                                               
+
                         try:
                             socket.getaddrinfo(cname_target, 80)
                         except socket.gaierror:
+                            key = (host, cname_target)
+                            if key in self._takeover_seen:
+                                break
+                            self._takeover_seen.add(key)
                             self.store.dns_findings.append({
                                 "issue": "CNAME_Takeover_Candidate",
                                 "severity": "CRITICAL",
                                 "detail": f"{host} -> {cname_target} ({svc_name}) resolves to NXDOMAIN — potential subdomain takeover"})
                             self.emit.warn_sev(f"[DNS] TAKEOVER CANDIDATE: {host} -> {cname_target} ({svc_name})", "CRITICAL")
+                        break
             except Exception:
                 pass
+
+    async def check_takeover_candidates(self, hostnames: list):
+        """Run the same CNAME + dangling-service + NXDOMAIN check used on the
+        root domain against a list of already-enumerated subdomains (e.g.
+        from crt.sh certificate-transparency enumeration). This is where
+        subdomain takeover detection has the most value — a long-forgotten
+        CNAME pointing at a deprovisioned cloud resource is far more likely
+        on some obscure subdomain than on the root or www. Detection only;
+        never attempts to claim the dangling resource."""
+        hostnames = [h for h in dict.fromkeys(hostnames) if h]
+        if not hostnames:
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            import dns.resolver as _dnsr
+            await loop.run_in_executor(None, self._check_takeover_dnspython, _dnsr, hostnames)
+        except ImportError:
+            await loop.run_in_executor(None, self._check_takeover_socket, hostnames)
+
+    def _check_takeover_dnspython(self, _dnsr, hostnames: list):
+        for host in hostnames:
+            try:
+                ans = _dnsr.resolve(host, "CNAME")
+                cname_target = str(ans[0].target).rstrip(".")
+            except Exception:
+                continue
+            for svc_frag, svc_name in self._TAKEOVER_SERVICES.items():
+                if svc_frag in cname_target:
+                    try:
+                        socket.getaddrinfo(cname_target, 80)
+                    except socket.gaierror:
+                        key = (host, cname_target)
+                        if key in self._takeover_seen:
+                            break
+                        self._takeover_seen.add(key)
+                        self.store.dns_findings.append({
+                            "issue": "CNAME_Takeover_Candidate",
+                            "severity": "CRITICAL",
+                            "detail": f"{host} -> {cname_target} ({svc_name}) resolves to NXDOMAIN — potential subdomain takeover"})
+                        self.emit.warn_sev(f"[DNS] TAKEOVER CANDIDATE: {host} -> {cname_target} ({svc_name})", "CRITICAL")
+                    break
+
+    def _check_takeover_socket(self, hostnames: list):
+        # No dnspython available — stdlib socket can't read CNAME records, so
+        # a dangling-service fingerprint can't be named. Still worth a nudge:
+        # a subdomain that doesn't resolve at all is at least worth a second
+        # look, even though we can't call it a takeover candidate without
+        # seeing what it's a CNAME for.
+        self.emit.info(
+            f"[DNS] Skipping CNAME-based takeover check on {len(hostnames)} "
+            f"enumerated subdomain(s) — install dnspython for this")
 
     def _run_socket(self):
                                                         
@@ -7418,6 +7877,7 @@ class Spider:
         self.queue.put_nowait((target, 0, "Seed"))
         self._current_url: str = target
         self._dynamic_scope: Set[str] = set()
+        self._processed_since_checkpoint = 0
         # Build compiled CTF flag patterns once from templates
         self.cfg.ctf_flag_patterns = _build_ctf_flag_patterns(
             getattr(self.cfg, "ctf_flag_templates", [])
@@ -7425,6 +7885,8 @@ class Spider:
         if self.cfg.ctf_flag_patterns:
             fmts = ", ".join(t for t, _ in self.cfg.ctf_flag_patterns)
             self.emit.always_info(f"[CTF] Flag scanning enabled — formats: {fmts}")
+        if getattr(self.cfg, "resume_file", None):
+            self._load_checkpoint()
 
     @staticmethod
     def _check_is_ip(host: str) -> bool:
@@ -7435,6 +7897,125 @@ class Spider:
             return True
         except ValueError:
             return False
+
+    # ── Scan resume/checkpointing ───────────────────────────────────────
+    # Deliberately pragmatic: rather than restructuring run() to skip whole
+    # phases on resume, a resumed scan replays the normal recon+crawl
+    # pipeline, but with self.visited and every Store finding pre-loaded
+    # from the checkpoint. Existing dedup logic already in place — the
+    # queue's visited-check, and every _*_seen set each finding-recorder
+    # consults — then makes anything already covered a no-op, so nothing
+    # gets re-crawled or double-counted. No signature verification/replay
+    # concerns here; it's just a snapshot of our own in-memory state.
+    _CKPT_LIST_FIELDS = [
+        "comments", "secrets", "credentials", "robots_paths",
+        "robots_allowed_paths", "cors_issues", "graphql", "openapi",
+        "sourcemaps", "extracted_data", "socketio_endpoints", "crt_subdomains",
+        "waf_findings", "tls_findings", "header_audit", "dns_findings",
+        "sensitive_files", "js_libs", "cloud_probes", "oauth_findings",
+        "captcha_findings", "reflected_params", "jwt_findings",
+    ]
+    _CKPT_DICT_FIELDS = [
+        "endpoints", "whatweb_data", "target_response_headers",
+        "js_orphan_params", "_graph_nodes",
+    ]
+    _CKPT_SET_STR_FIELDS = [
+        "tech_stack", "_manifest_pages", "_socketio_seen", "_crt_seen",
+        "_oauth_seen", "_captcha_seen", "_jwt_seen",
+    ]
+    _CKPT_SET_TUPLE_FIELDS = [
+        "_credential_seen", "_extracted_seen", "_graph_edge_seen",
+        "_bg_req_seen", "_reflected_seen",
+    ]
+    _CKPT_SCALAR_FIELDS = ["login_result", "api_spec_diff"]
+
+    def _write_checkpoint(self):
+        path = getattr(self.cfg, "checkpoint_file", None)
+        if not path:
+            return
+        try:
+            s = self.store
+            data = {
+                "version": VERSION,
+                "target": self.target,
+                "saved_at": time.time(),
+                "visited": sorted(self.visited),
+                # Non-destructive peek at the asyncio.Queue's backing deque —
+                # no items are consumed, so the live crawl is unaffected.
+                "queue": list(self.queue._queue),
+                "store": {},
+            }
+            for f in self._CKPT_LIST_FIELDS:
+                data["store"][f] = getattr(s, f, [])
+            for f in self._CKPT_DICT_FIELDS:
+                data["store"][f] = getattr(s, f, {})
+            for f in self._CKPT_SET_STR_FIELDS:
+                data["store"][f] = sorted(getattr(s, f, set()))
+            for f in self._CKPT_SET_TUPLE_FIELDS:
+                data["store"][f] = [list(t) for t in getattr(s, f, set())]
+            for f in self._CKPT_SCALAR_FIELDS:
+                data["store"][f] = getattr(s, f, None)
+            data["store"]["page_bg_requests"] = dict(getattr(s, "page_bg_requests", {}))
+
+            tmp = f"{path}.tmp"
+            with open(tmp, "w") as fh:
+                json.dump(data, fh, default=str)
+            os.replace(tmp, path)
+        except Exception as e:
+            self.emit.warn(f"[Checkpoint] Failed to write {path}: {e}")
+
+    def _load_checkpoint(self):
+        path = getattr(self.cfg, "resume_file", None)
+        if not path:
+            return
+        try:
+            with open(path, "r") as fh:
+                data = json.load(fh)
+        except Exception as e:
+            self.emit.warn(f"[Resume] Couldn't read checkpoint {path}: {e}")
+            return
+        if data.get("target") != self.target:
+            self.emit.warn(
+                f"[Resume] Checkpoint {path} was saved for "
+                f"{data.get('target')!r}, not {self.target!r} — ignoring it "
+                f"and starting this scan fresh."
+            )
+            return
+        try:
+            self.visited = set(data.get("visited", []))
+            for item in data.get("queue", []):
+                url, depth, source = item[0], item[1], item[2]
+                self.queue.put_nowait((url, depth, source))
+            s = self.store
+            sd = data.get("store", {})
+            for f in self._CKPT_LIST_FIELDS:
+                if f in sd:
+                    setattr(s, f, sd[f])
+            for f in self._CKPT_DICT_FIELDS:
+                if f in sd:
+                    setattr(s, f, sd[f])
+            for f in self._CKPT_SET_STR_FIELDS:
+                if f in sd:
+                    setattr(s, f, set(sd[f]))
+            for f in self._CKPT_SET_TUPLE_FIELDS:
+                if f in sd:
+                    setattr(s, f, set(tuple(t) for t in sd[f]))
+            for f in self._CKPT_SCALAR_FIELDS:
+                if f in sd:
+                    setattr(s, f, sd[f])
+            if "page_bg_requests" in sd:
+                pbr = defaultdict(list)
+                pbr.update(sd["page_bg_requests"])
+                s.page_bg_requests = pbr
+            self.emit.always_success(
+                f"[Resume] Loaded checkpoint {path} — "
+                f"{len(self.visited)} URL(s) already visited, "
+                f"{len(data.get('queue', []))} still queued, "
+                f"prior findings carried into this run."
+            )
+        except Exception as e:
+            self.emit.warn(f"[Resume] Checkpoint {path} was malformed — "
+                            f"partially applied, continuing: {e}")
 
     def is_valid(self, url):
         try:
@@ -8416,6 +8997,52 @@ class Spider:
         
         self.emit.crawl_feed(ftype, 'GET', url, s, len(body))
 
+        # ── Reflected-parameter detection (passive) ───────────────────────
+        # Checks whether a query-parameter value THIS crawl already sent
+        # shows up verbatim in the response body. That's a candidate for
+        # reflected XSS/template injection — not a confirmed one, just a
+        # lead worth a manual payload check. No payloads are ever injected
+        # here, only observation of requests Spider made anyway.
+        _qs = parse_qs(urlparse(url).query)
+        if _qs and body:
+            _refl_params = []
+            for _pname, _pvals in _qs.items():
+                for _pval in _pvals:
+                    if len(_pval) >= 3 and _pval in body:
+                        _refl_params.append(_pname)
+                        break
+            if _refl_params:
+                _rkey = self.store._key(url, "GET")
+                _rep = self.store.endpoints.get(_rkey)
+                if _rep is not None:
+                    _rep["reflected_params"] = sorted(set(_rep.get("reflected_params", []) + _refl_params))
+                for _rp in _refl_params:
+                    _sig = (url, _rp)
+                    if _sig not in self.store._reflected_seen:
+                        self.store._reflected_seen.add(_sig)
+                        self.store.reflected_params.append({"url": url, "param": _rp})
+                        self.emit.tagged("Reflected", C.MG, f"{_rp} ← {Emit.trunc_url(url, 60)}")
+
+        # ── JWT structural inspection (decode-only) ───────────────────────
+        # Scans the response body and headers (cookies, Authorization-style
+        # echoes) for anything JWT-shaped, decodes the header/payload, and
+        # flags structural weaknesses. Never verifies or cracks a signature.
+        _jwt_candidates = set(_JWT_RE.findall(body or ""))
+        for _hv in (hdrs or {}).values():
+            _jwt_candidates.update(_JWT_RE.findall(str(_hv)))
+        for _tok in _jwt_candidates:
+            if _tok in self.store._jwt_seen:
+                continue
+            self.store._jwt_seen.add(_tok)
+            _jinfo = inspect_jwt(_tok)
+            if _jinfo is None:
+                continue
+            self.store.jwt_findings.append({
+                "url": url, "token_preview": _tok[:28] + "…", **_jinfo})
+            if _jinfo["issues"]:
+                self.emit.tagged("JWT", C.BL,
+                    f"{Emit.trunc_url(url, 45)} (alg={_jinfo['alg']}) — {'; '.join(_jinfo['issues'])}")
+
         if self.cfg.enable_extraction:
             Extractor.extract_data(body, url, self.store, self.emit)
         Extractor.credential_objects(body, url, self.store, self.emit)
@@ -8543,6 +9170,11 @@ class Spider:
                         pass
                     else:
                         await self._fetch_and_process(session, url, depth, source)
+                        if getattr(self.cfg, "checkpoint_file", None):
+                            self._processed_since_checkpoint += 1
+                            if self._processed_since_checkpoint >= 25:
+                                self._processed_since_checkpoint = 0
+                                self._write_checkpoint()
             except Exception as e:
                 self.emit.warn(f"[Worker] Error processing {url}: {e}")
             finally:
@@ -8571,6 +9203,349 @@ class Spider:
                 self.store.add_endpoint(ep_url, source="OIDC_Discovery", score=Conf.CONFIRMED,
                                         auth_required=True)
                 self.emit.always_success(f"[OIDC] {key}: {ep_url}")
+
+    async def _record_oauth_finding(self, trigger_url: str, info: dict):
+        if info["authorize_url"] in self.store._oauth_seen:
+            return
+        self.store.oauth_findings.append({"trigger_url": trigger_url, **info})
+        self.store._oauth_seen.add(info["authorize_url"])
+        self.emit.crawl_feed("OAuth/SSO", "GET", Emit.trunc_url(info["authorize_url"]))
+        self.emit.always_success(f"[OAuth] {info['provider']} detected  ←  {Emit.trunc_url(trigger_url, 50)}")
+        gaps = []
+        if not info["has_pkce"]:
+            gaps.append("no PKCE (code_challenge)")
+        if not info["has_state"]:
+            gaps.append("no state param (possible CSRF on the OAuth callback)")
+        if gaps:
+            self.emit.always_info(f"[OAuth] {info['provider']} authorize request missing: {', '.join(gaps)}")
+
+    def _record_captcha_finding(self, url: str, kind: str):
+        if url in self.store._captcha_seen:
+            return
+        self.store._captcha_seen.add(url)
+        self.store.captcha_findings.append({"url": url, "type": kind})
+        self.emit.tagged("CAPTCHA", C.Y, f"{kind} detected at {Emit.trunc_url(url, 55)}")
+
+    def _diff_api_spec(self):
+        """If an OpenAPI/Swagger spec was found, diff what it documents
+        against what the crawl actually reached. Two directions, both
+        useful for mapping real attack surface: endpoints the spec lists
+        that nothing ever got a response from (deprecated? access-
+        restricted? just never linked from the UI, hence never queued
+        until the OpenAPI probe itself queued it?), and endpoints under the
+        API's own path shape that the crawl reached but the spec never
+        mentions at all — undocumented/shadow surface a spec-driven review
+        would miss entirely."""
+        if not self.store.openapi:
+            return
+        documented_not_reached, shadow_undocumented = [], []
+        for ep in self.store.endpoints.values():
+            is_documented = "OpenAPI" in ep.get("source", [])
+            # observed_status is only populated by a few specialized probes
+            # (admin/sensitive-file probing, the audit pass) — not by the
+            # ordinary BFS crawl. The real "Spider actually requested this"
+            # signal for everything else is self.visited.
+            reached = bool(ep.get("observed_status")) or normalize(ep["url"]) in self.visited
+            if is_documented and not reached:
+                documented_not_reached.append(ep["url"])
+            elif reached and not is_documented:
+                try:
+                    path = urlparse(ep["url"]).path
+                except Exception:
+                    continue
+                if self.store._API_PATH_RE.match(path):
+                    shadow_undocumented.append(ep["url"])
+        if not (documented_not_reached or shadow_undocumented):
+            return
+        self.store.api_spec_diff = {
+            "documented_not_reached": sorted(set(documented_not_reached)),
+            "shadow_undocumented":    sorted(set(shadow_undocumented)),
+        }
+        if documented_not_reached:
+            self.emit.always_info(
+                f"[OpenAPI] {len(documented_not_reached)} spec-documented endpoint(s) "
+                f"never got a response — deprecated, access-restricted, or just unlinked from the UI")
+        if shadow_undocumented:
+            self.emit.always_info(
+                f"[OpenAPI] {len(shadow_undocumented)} API-shaped endpoint(s) reached by the crawl "
+                f"but NOT in the spec — shadow surface a spec-only review would miss")
+
+    async def _investigate_sso_link(self, session, label: str, url: Optional[str], trigger_url: str):
+        """A page offered a visible SSO/third-party-login control. Figure out
+        what it actually points to: the href may already BE the third-party
+        authorize URL, or it may be a local path that itself redirects to
+        one, or it may be a local handler that doesn't redirect at all (still
+        worth reporting), or it may have no href at all (JS-driven — report
+        the control's presence anyway, since that's exactly the case that
+        used to go undetected). One read-only GET at most; never follows the
+        flow any further than identifying where it leads."""
+        if url is None:
+            await self._record_oauth_finding(trigger_url, {
+                "provider": "Unidentified (JS-driven SSO control)",
+                "authorize_url": f"(js-driven control: {label})",
+                "params": {}, "has_pkce": False, "has_state": False,
+            })
+            return
+
+        # The href may already be the third-party authorize URL itself.
+        info = classify_oauth_redirect(url)
+        if info:
+            await self._record_oauth_finding(trigger_url, info)
+            return
+
+        try:
+            status, headers, body, loc = await fetch_no_redirect(session, "GET", url, self.rl)
+        except Exception:
+            status = None
+        if status is None:
+            return
+
+        if loc:
+            abs_loc = urljoin(url, loc)
+            info = classify_oauth_redirect(abs_loc)
+            if info:
+                await self._record_oauth_finding(trigger_url, info)
+                return
+            # We already know — from the link's own text/href — that this
+            # hop IS an SSO redirect, even though it doesn't match the strict
+            # OAuth2/OIDC query/path shape. Report it with a best-effort
+            # provider guess rather than silently dropping it.
+            provider = "Unrecognized SSO provider"
+            for pattern, name in _OAUTH_PROVIDER_SIGS:
+                if pattern.search(abs_loc):
+                    provider = name
+                    break
+            await self._record_oauth_finding(trigger_url, {
+                "provider": provider, "authorize_url": abs_loc,
+                "params": {}, "has_pkce": False, "has_state": False,
+            })
+            return
+
+        # No further redirect — this is most likely a local SSO/IdP-proxy
+        # handler. Still a meaningful recon finding on its own.
+        await self._record_oauth_finding(trigger_url, {
+            "provider": "Local/custom SSO handler",
+            "authorize_url": url,
+            "params": {}, "has_pkce": False, "has_state": False,
+        })
+
+    async def _detect_oauth_sso(self, session):
+        """Unauthenticated-recon OAuth/SSO fingerprinting. Probes a short list
+        of common login-trigger paths with redirects disabled so the raw
+        Location header (if any) can be inspected, classifies anything
+        OAuth/OIDC-authorize-shaped, and identifies the provider by hostname/
+        path pattern. Also checks whatever body comes back for CAPTCHA
+        markers. Detection and fingerprinting only — Spider never attempts
+        to follow or automate the actual OAuth flow, and never attempts to
+        solve a CAPTCHA. Runs during every unauthenticated recon pass,
+        independent of --login."""
+        for path in _OAUTH_LOGIN_TRIGGER_PATHS:
+            url = urljoin(self.target, path)
+            try:
+                status, headers, body, loc = await fetch_no_redirect(session, "GET", url, self.rl)
+            except Exception:
+                continue
+            if status is None:
+                continue
+
+            if loc:
+                abs_loc = urljoin(url, loc)
+                info = classify_oauth_redirect(abs_loc)
+                if info:
+                    await self._record_oauth_finding(url, info)
+            elif status and status < 400:
+                # No redirect — but the page itself may render a visible
+                # "Continue with SSO" control alongside a classic form,
+                # which a redirect-only probe would otherwise miss entirely.
+                for label, href in find_sso_links(body, url):
+                    await self._investigate_sso_link(session, label, href, url)
+
+            cap = detect_captcha(body)
+            if cap:
+                self._record_captcha_finding(url, cap)
+
+    async def _attempt_login(self, session):
+        """Classic HTML username/password form-login automation, gated
+        behind --login/--login-user/--login-pass. Parses the login form,
+        pre-checks the page for an OAuth/SSO redirect or a CAPTCHA and
+        aborts (reporting, not attempting) if either is found — those are
+        both explicitly out of scope for automation — then submits the
+        form and merges any resulting session cookies into the active
+        aiohttp session so the rest of the scan runs authenticated."""
+        login_url = self.cfg.login_url
+        self.emit.animator.update(0, "Recon Login")
+        self.emit.always_info(f"[Login] Attempting form login at {login_url}")
+
+        status, headers, body, loc = await fetch_no_redirect(session, "GET", login_url, self.rl)
+        if status is None:
+            self.store.login_result = {"ok": False, "reason": "login page unreachable"}
+            self.emit.warn(f"[Login] {login_url} unreachable — skipping login automation")
+            return
+
+        # Target already redirected before we even saw a form — almost
+        # certainly SSO, not a page we can submit credentials to.
+        if loc:
+            abs_loc = urljoin(login_url, loc)
+            info = classify_oauth_redirect(abs_loc)
+            if info:
+                await self._record_oauth_finding(login_url, info)
+                self.store.login_result = {
+                    "ok": False,
+                    "reason": f"login URL redirects to {info['provider']} (OAuth/SSO) — "
+                              f"automated form submission isn't applicable here",
+                }
+                self.emit.warn(f"[Login] Aborted — {login_url} redirects to an OAuth/SSO "
+                                f"provider ({info['provider']}). Use --cookie with a "
+                                f"manually-obtained session instead.")
+                return
+            # Non-OAuth redirect (e.g. http->https, or a login page that
+            # lives at a different path) — follow it once to find the form.
+            status, headers, body, _ = await fetch(session, "GET", abs_loc, self.rl)
+            login_url = abs_loc
+            if status is None:
+                self.store.login_result = {"ok": False, "reason": "login page unreachable after redirect"}
+                return
+
+        cap = detect_captcha(body)
+        if cap:
+            self._record_captcha_finding(login_url, cap)
+            self.store.login_result = {"ok": False, "reason": f"{cap} present on login page"}
+            self.emit.warn(f"[Login] Aborted — {cap} detected on {login_url}. "
+                            f"Spider detects and reports CAPTCHAs; it never attempts to solve them.")
+            return
+
+        # The page may offer a visible "Continue with SSO" control alongside
+        # the classic form (a very common real-world layout). That doesn't
+        # block form-login automation — a legitimate password field can sit
+        # right next to it — but it's exactly the case a redirect-only probe
+        # would otherwise miss entirely, so always surface it as its own
+        # recon finding regardless of how the form submission below goes.
+        for label, href in find_sso_links(body, login_url):
+            await self._investigate_sso_link(session, label, href, login_url)
+
+        soup = BeautifulSoup(body or "", "lxml")
+        login_form = None
+        for form in soup.find_all("form"):
+            if form.find("input", attrs={"type": re.compile("^password$", re.I)}):
+                login_form = form
+                break
+        if login_form is None:
+            self.store.login_result = {"ok": False, "reason": "no username/password form found on the page"}
+            self.emit.warn(f"[Login] Aborted — no login form (password field) found at {login_url}")
+            return
+
+        action = login_form.get("action") or login_url
+        post_url = urljoin(login_url, action)
+        method = (login_form.get("method") or "POST").upper()
+
+        payload = {}
+        user_field = pass_field = None
+        for el in login_form.find_all(["input", "select", "textarea"]):
+            nm = (el.get("name") or "").strip()
+            if not nm:
+                continue
+            el_type = (el.get("type") or "text").lower()
+            if el_type == "password":
+                pass_field = nm
+                continue
+            if el_type in ("submit", "button", "reset", "image", "file"):
+                continue
+            if el_type == "hidden":
+                payload[nm] = el.get("value", "")
+                continue
+            # Likely the username/email field — first non-hidden text-ish
+            # input that isn't the password field itself.
+            name_id_blob = f"{nm} {el.get('id','')} {el.get('placeholder','')}".lower()
+            if user_field is None and (
+                el_type in ("text", "email") or
+                re.search(r'user|email|login|account', name_id_blob)
+            ):
+                user_field = nm
+            else:
+                payload.setdefault(nm, el.get("value", ""))
+
+        if not pass_field:
+            self.store.login_result = {"ok": False, "reason": "form has no password field"}
+            self.emit.warn(f"[Login] Aborted — couldn't identify a password field in the form at {login_url}")
+            return
+        if not user_field:
+            # Fall back to the first non-password, non-hidden input.
+            for el in login_form.find_all(["input"]):
+                nm = (el.get("name") or "").strip()
+                el_type = (el.get("type") or "text").lower()
+                if nm and nm != pass_field and el_type not in ("hidden", "submit", "button", "reset", "image", "file"):
+                    user_field = nm
+                    break
+        if not user_field:
+            self.store.login_result = {"ok": False, "reason": "couldn't identify a username/email field"}
+            self.emit.warn(f"[Login] Aborted — couldn't identify a username field in the form at {login_url}")
+            return
+
+        payload[user_field] = self.cfg.login_user
+        payload[pass_field]  = self.cfg.login_pass
+
+        pre_login_cookies = {c.key: c.value for c in session.cookie_jar}
+        try:
+            async with session.request(method, post_url, data=payload, ssl=False,
+                                       allow_redirects=True,
+                                       timeout=aiohttp.ClientTimeout(total=self.cfg.timeout)) as resp:
+                resp_status = resp.status
+                resp_text   = await resp.text(errors="replace")
+                final_url   = str(resp.url)
+        except Exception as e:
+            self.store.login_result = {"ok": False, "reason": f"submission failed: {e}"}
+            self.emit.warn(f"[Login] Submission to {post_url} failed: {e}")
+            return
+
+        post_login_cookies = {c.key: c.value for c in session.cookie_jar}
+        new_cookies = {k: v for k, v in post_login_cookies.items() if pre_login_cookies.get(k) != v}
+
+        # Heuristic success check. A *new* cookie is a nice-to-have signal,
+        # not a requirement — plenty of apps (classic PHP/PHPSESSID chief
+        # among them) issue the session cookie on the very first request and
+        # simply flip that same session to "authenticated" server-side on
+        # login, with no Set-Cookie at all on success. Requiring a cookie
+        # change here reports a perfectly successful login as a failure.
+        # So: no password field + no explicit error is the core signal, and
+        # a redirect away from the login page / an authenticated-looking
+        # page / a new cookie are corroborating signals — any one of them
+        # is enough once the core signal holds.
+        still_has_password_field = bool(re.search(
+            r'type=["\']?password', resp_text or "", re.I))
+        looks_like_error = bool(re.search(
+            r'invalid (?:username|password|login|credentials)|login failed|incorrect password|'
+            r'authentication failed|access denied|account (?:locked|disabled|suspended)|'
+            r'too many attempts',
+            resp_text or "", re.I))
+        moved_from_login = final_url.rstrip("/") != login_url.rstrip("/")
+        looks_authenticated = bool(re.search(
+            r'\blogout\b|\bsign[\s_-]?out\b|\bwelcome back\b|\bmy account\b|\baccount\s*settings\b|'
+            r'\bdashboard\b|\bwelcome,?\s',
+            resp_text or "", re.I))
+        corroborating = bool(new_cookies) or moved_from_login or looks_authenticated
+        success = (not still_has_password_field) and (not looks_like_error) and corroborating
+
+        if success:
+            if new_cookies:
+                self.cookies.update(new_cookies)
+            signal = ("new cookie(s) set" if new_cookies else
+                      "redirected away from the login page" if moved_from_login else
+                      "page content looks authenticated")
+            self.store.login_result = {
+                "ok": True, "post_url": post_url, "final_url": final_url,
+                "cookies_set": sorted(new_cookies.keys()),
+                "signal": signal,
+            }
+            self.emit.always_success(
+                f"[Login] Success ({signal}) — continuing the scan authenticated")
+        else:
+            reason = "server returned a login error" if looks_like_error else \
+                     "response still has a password field" if still_has_password_field else \
+                     "no new cookie, no redirect, and no authenticated-looking content — " \
+                     "can't confirm the login actually took"
+            self.store.login_result = {"ok": False, "reason": reason, "status": resp_status, "final_url": final_url}
+            self.emit.warn(f"[Login] Submission to {post_url} didn't look successful ({reason}) — "
+                            f"continuing the scan unauthenticated")
 
     _AUTOINDEX_SIGS = re.compile(
         r'index of /|<title>\s*index of|parent directory</a>|\[to parent directory\]|'
@@ -8735,8 +9710,14 @@ class Spider:
         req_headers.update(self.extra_headers)
         connector = aiohttp.TCPConnector(limit=self.cfg.concurrency, ttl_dns_cache=300, ssl=False)
         timeout   = aiohttp.ClientTimeout(total=self.cfg.timeout)
+        # unsafe=True: aiohttp's default cookie jar silently refuses to store
+        # cookies for plain IP-address hosts, which breaks session-cookie
+        # handling (including --login) against bare-IP and internal targets —
+        # a routine case in pentesting.
+        cookie_jar = aiohttp.CookieJar(unsafe=True)
         async with aiohttp.ClientSession(headers=req_headers, cookies=self.cookies,
-                                          timeout=timeout, connector=connector) as session:
+                                          timeout=timeout, connector=connector,
+                                          cookie_jar=cookie_jar) as session:
             try:
                                                                         
                 _t_phase_start = time.time()
@@ -8773,6 +9754,27 @@ class Spider:
 
                 self.emit.animator.start_anim("Recon Probing Base")
 
+                # ── Auth surface: optional form-login automation, then
+                # OAuth/SSO redirect fingerprinting + CAPTCHA detection ──
+                # Login runs first (when requested) so its cookies are
+                # merged into the session before anything else. The OAuth/
+                # SSO probe runs unconditionally afterward — on a target
+                # that redirects to third-party SSO, the unauthenticated
+                # case is exactly when these login-trigger paths bounce
+                # somewhere interesting; a successfully authenticated scan
+                # simply won't see those redirects, so this is safe either way.
+                if self.cfg.login_url:
+                    try:
+                        await self._attempt_login(session)
+                    except Exception as e:
+                        self.store.login_result = {"ok": False, "reason": f"unexpected error: {e}"}
+                        self.emit.warn(f"[Login] Unexpected error during login automation: {e}")
+                self.emit.animator.update(0, "Recon Auth / SSO Surface")
+                try:
+                    await self._detect_oauth_sso(session)
+                except Exception as e:
+                    self.emit.warn(f"[OAuth] Detection pass failed: {e}")
+
                 # ── Fire WhatWeb + TLS concurrently ───────────────────────────
                 async def _tls_and_headers():
                     if not getattr(self.cfg, 'no_tls', False):
@@ -8800,11 +9802,18 @@ class Spider:
                     await _dns.run()
                 if self.cfg.enable_graphql:
                     await probe_graphql(session, self.target, self.store, self.emit, self.rl)
+                if self.cfg.enable_openapi:
+                    self.emit.animator.update(0, "Recon OpenAPI/Swagger")
+                    await probe_openapi(session, self.target, self.store, self.emit, self.rl, self.queue)
                 if not self.is_ip_target and self.cfg.enable_subdomain_enum:
                     self.emit.animator.update(0, "Recon Subdomains")
                     _subenum = SubdomainEnumerator(self.target, self.store,
                                                    self.queue, self.emit, self.is_valid)
                     await _subenum.run()
+                    if self.store.crt_subdomains:
+                        self.emit.animator.update(0, "Recon Subdomain Takeover")
+                        await _dns.check_takeover_candidates(
+                            [s["hostname"] for s in self.store.crt_subdomains])
                 elif not self.is_ip_target:
                     self.emit.always_info("[Subdomains] Skipped (use --subdomains to enable)")
 
@@ -9026,6 +10035,7 @@ class Spider:
                 classify_auth_endpoints(self.store)
                 classify_ctf_findings(self.store)
                 _flag_upload_endpoints(self.store)
+                self._diff_api_spec()
                                                               
                 self.emit.animator.start_anim("ASM: JS SCA Analysis")
                 await analyze_js_deps(session, self.target, self.store, self.emit, self.rl)
@@ -9036,10 +10046,12 @@ class Spider:
                     self.emit.animator.stop_anim()
             finally:
                 self.emit.animator.stop_anim()
+                if getattr(self.cfg, "checkpoint_file", None):
+                    self._write_checkpoint()
 
-                                                                        
-             
-                                                                        
+
+
+
 
 def diff_crawls(old_json: str, new_json: str) -> dict:
     old = json.loads(old_json); new = json.loads(new_json)
@@ -9363,8 +10375,8 @@ def _build_parser() -> argparse.ArgumentParser:
     auth = p.add_argument_group(f"{C.CY}Authentication{C.RST}")
     auth.add_argument("--cookie",  "-C", type=str, default=None, metavar="COOKIE",
                       help='Cookie string (e.g., "session=42"), dict, or path to a cookie file. '
-                           'Since the spider does not support automated form-login using username/password, '
-                           'you must manually log in via a browser and supply the session cookie here.')
+                           'For an OAuth/SSO-gated target, or any login flow --login can\'t handle, '
+                           'log in manually via a browser and supply the resulting session cookie here instead.')
     auth.add_argument("--auth",    "-a", type=str, default=None, metavar="HEADER",
                       help='Authorization header  e.g. "Bearer eyJ..."')
     auth.add_argument("--basic-auth", "-u", type=str, default=None, metavar="USER:PASS",
@@ -9374,6 +10386,17 @@ def _build_parser() -> argparse.ArgumentParser:
                       help='Custom header, repeatable, formatted as "Name: Value"  e.g. -X "X-Bug-Bounty: Bugcrowd-yourhandle" '
                            '-X "X-Research-Purpose: authorized-pentest"  '
                            '(use for program-required tester-identification headers)')
+    auth.add_argument("--login", "-l", type=str, default=None, metavar="URL",
+                      help='URL of a classic HTML username/password login form. Spider parses the '
+                           'form, submits -n/-z (--login-user/--login-pass), and carries the resulting '
+                           'session cookies through the rest of the scan. Aborts with a clear report '
+                           '(no submission attempted) if the page redirects to a third-party OAuth/SSO '
+                           'provider or serves a CAPTCHA — neither is something Spider will try to bypass; '
+                           'use --cookie instead for those.')
+    auth.add_argument("--login-user", "-n", type=str, default=None, metavar="USERNAME",
+                      help='Username/email to submit with -l/--login')
+    auth.add_argument("--login-pass", "-z", type=str, default=None, metavar="PASSWORD",
+                      help='Password to submit with -l/--login')
 
     out = p.add_argument_group(f"{C.CY}Output{C.RST}")
     out.add_argument("--out",    "-o", type=str, default=None, metavar="FILE",
@@ -9388,6 +10411,16 @@ def _build_parser() -> argparse.ArgumentParser:
     out.add_argument("--save-json", "-j", action="store_true",
                      help="Save the full JSON report to disk (opt-in — off by default; "
                           "results still print to the terminal either way)")
+
+    resume = p.add_argument_group(f"{C.CY}Scan Resume{C.RST}")
+    resume.add_argument("--checkpoint", type=str, default=None, metavar="FILE",
+                        help="Periodically write crawl progress/findings to FILE "
+                             "(and once more on exit, even if interrupted or crashed), "
+                             "so the scan can be resumed later with --resume")
+    resume.add_argument("--resume", type=str, default=None, metavar="FILE",
+                        help="Resume a previous scan from a --checkpoint FILE — "
+                             "already-visited URLs are skipped and all prior "
+                             "findings are carried into this run's final report")
 
     flags = p.add_argument_group(f"{C.CY}Feature Flags{C.RST}")
     flags.add_argument("--no-playwright", "-P", action="store_true",
@@ -9683,6 +10716,11 @@ def main():
                                  if args.ctf_flag else [],
             extra_scope       = [h.strip() for h in args.scope.split(",") if h.strip()]
                                 if args.scope else [],
+            login_url         = args.login,
+            login_user        = args.login_user,
+            login_pass        = args.login_pass,
+            resume_file       = args.resume,
+            checkpoint_file   = args.checkpoint,
         )
 
         print()

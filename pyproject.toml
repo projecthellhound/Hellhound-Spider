@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hellhound-spider"
-version = "14.2"
+version = "14.5"
 description = "Autonomous web crawler and recon engine for security testing — SPA + Non-SPA crawling, header analysis, subdomain enumeration, and intelligence classification"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 authors = [
-    { name = "Sree Danush S", email = "lazzer@gmail.com" }
+    { name = "Sree Danush S", email = "ssreedanush@gmail.com" }
 ]
 keywords = [
     "security", "pentest", "crawler", "web-crawler", "spa", "recon",
@@ -49,9 +49,9 @@ full = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/project-hellhound-org/hellhound-spider"
-Changelog = "https://github.com/project-hellhound-org/hellhound-spider/blob/main/CHANGELOG.md"
-Issues = "https://github.com/project-hellhound-org/hellhound-spider/issues"
+Homepage = "https://github.com/projecthellhound/Hellhound-Spider"
+Changelog = "https://github.com/projecthellhound/Hellhound-Spider/blob/main/CHANGELOG.md"
+Issues = "https://github.com/projecthellhound/Hellhound-Spider/issues"
 
 [project.scripts]
 spider = "spider:main"

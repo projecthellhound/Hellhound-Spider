@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white"/>
-  <img src="https://img.shields.io/badge/version-14.2-red?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-14.5-red?style=flat-square"/>
   <img src="https://img.shields.io/badge/pypi-hellhound--spider-blue?style=flat-square&logo=pypi&logoColor=white"/>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square"/>
@@ -54,8 +54,8 @@ One thing pip genuinely can't install for you: **WhatWeb** (optional technology 
 ### From source (Linux / macOS)
 
 ```bash
-git clone https://github.com/project-hellhound-org/hellhound-spider.git
-cd hellhound-spider
+git clone https://github.com/projecthellhound/Hellhound-Spider.git
+cd Hellhound-Spider
 chmod +x install.sh
 ./install.sh
 ```
@@ -141,7 +141,17 @@ spider https://target.com --ctf-flag "HELLCORP{},FLAG{}"
 
 ### Discovery Vectors
 
-HTML crawl, live SPA XHR interception, parent-directory backtracking (probes ancestor directories the forward crawl never linked to), Intelligent Robots Analysis (Disallow/Allow mapping + comment mining), sitemap XML (with index recursion), `.well-known` (OIDC/JWKS), JSON path chaining, SPA hash routes, lazy-load attributes, CSP header hints, OpenAPI/Swagger specs, GraphQL introspection, crt.sh certificate transparency, Wayback Machine CDX API, security.txt (RFC 9116), HAR file import, HTML comment mining, response header analysis, TLS/DNS intel, WAF fingerprinting, and JS SCA analysis.
+HTML crawl, live SPA XHR interception, parent-directory backtracking (probes ancestor directories the forward crawl never linked to), Intelligent Robots Analysis (Disallow/Allow mapping + comment mining), sitemap XML (with index recursion), `.well-known` (OIDC/JWKS), JSON path chaining, SPA hash routes, lazy-load attributes, CSP header hints, OpenAPI/Swagger specs, GraphQL introspection, crt.sh certificate transparency, Wayback Machine CDX API, security.txt (RFC 9116), HAR file import, HTML comment mining, response header analysis, TLS/DNS intel, WAF fingerprinting, JS SCA analysis, OAuth/SSO redirect detection and provider fingerprinting (Okta, Azure AD, Google, Auth0, and more), and CAPTCHA detection.
+
+### Authentication
+
+- `-l/--login URL -n/--login-user USER -z/--login-pass PASS` — automates a classic HTML username/password login form and carries the session through the rest of the scan. Bails out with a report instead of guessing if the target turns out to be OAuth/SSO-gated or CAPTCHA-protected.
+- `-C/--cookie` — for everything `--login` can't handle (OAuth/SSO, MFA, anything scripted login isn't meant for): log in once by hand and hand Spider the session cookie.
+
+### Scan Resume
+
+- `--checkpoint FILE` — periodically saves crawl progress and findings to `FILE` (and once more on exit, even if interrupted or crashed).
+- `--resume FILE` — picks a scan back up from a checkpoint: already-visited URLs are skipped and every prior finding is carried into the final report.
 
 ### Parameter Mining
 

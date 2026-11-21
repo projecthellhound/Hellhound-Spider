@@ -2,6 +2,46 @@
 
 All notable changes to Hellhound Spider are documented here.
 
+## [14.6] — 2026-11-21
+
+### Fixed
+- **`--cookie`/`-C` crashed the whole scan with "Illegal key" when given a
+  full `Cookie: name=value` header line** (e.g. pasted straight out of
+  devtools/Burp) instead of just the `name=value` part — the leading
+  `Cookie: ` text got parsed as part of the first cookie's name, and
+  aiohttp's cookie jar rejected it outright. `--cookie` now strips a
+  leading `Cookie:`/`cookie:` prefix automatically, and any cookie name
+  that still isn't valid is skipped with a warning instead of crashing
+  the scan.
+- **Every crawled endpoint now gets a status code and content length
+  recorded**, not just the ones a specialized probe (admin panel check,
+  sensitive-file check, ...) happened to touch. A timing gap meant the
+  ordinary crawl path tried to record this before the endpoint even
+  existed in the store, so it silently went nowhere for most URLs —
+  fixed by registering the endpoint first.
+- **The final-summary endpoint table didn't show status/content-length
+  either** — it only ever printed a status hint for non-200 responses,
+  so the far more common 200 case showed nothing at all, and content
+  length wasn't shown there regardless of status. The live feed carrying
+  this information isn't enough on its own since the summary is what
+  people actually read afterward — both now show on every row there too.
+- **Status code and content length were both flat gray**, easy to miss
+  entirely. Status is now colored by class the way httpx colors `-sc`
+  (2xx green, 3xx cyan, 401/403 red, other 4xx yellow, 5xx magenta), in
+  both the live feed and the final summary; content length is no longer
+  gray either.
+
+### Changed
+- **Live crawl feed now shows status code and content length on every
+  line** (`[200] [1.2KB] http://...`), the way you'd normally reach for
+  httpx's `-sc -cl` for — no need to re-run a separate tool afterward
+  just to see what each discovered URL actually returned.
+- **Parameter map now groups endpoints that share the exact same
+  parameter names** (method + param-name set) instead of printing an
+  identical params line once per URL — the common case on any site with
+  several login/register/reset-password/2FA-style endpoints that all
+  take the same fields.
+
 ## [14.5] — 2026-11-09
 
 ### Fixed

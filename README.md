@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white"/>
-  <img src="https://img.shields.io/badge/version-14.5-red?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-14.6-red?style=flat-square"/>
   <img src="https://img.shields.io/badge/pypi-hellhound--spider-blue?style=flat-square&logo=pypi&logoColor=white"/>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square"/>
@@ -54,8 +54,8 @@ One thing pip genuinely can't install for you: **WhatWeb** (optional technology 
 ### From source (Linux / macOS)
 
 ```bash
-git clone https://github.com/projecthellhound/Hellhound-Spider.git
-cd Hellhound-Spider
+git clone https://github.com/project-hellhound-org/hellhound-spider.git
+cd hellhound-spider
 chmod +x install.sh
 ./install.sh
 ```

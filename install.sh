@@ -100,7 +100,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
 
 if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR" || error "Failed to create virtual environment. Ensure 'python3-venv' is installed."
+    # --prompt spider labels the activated shell prompt "(spider)" instead
+    # of the generic "(.venv)" every other Python project's venv shows —
+    # handy when you have several projects' venvs activated/switched
+    # between in the same terminal session and want to tell them apart.
+    python3 -m venv --prompt spider "$VENV_DIR" || error "Failed to create virtual environment. Ensure 'python3-venv' is installed."
 fi
 VENV_PYTHON="$VENV_DIR/bin/python3"
 

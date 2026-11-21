@@ -61,7 +61,7 @@ except Exception:
           
                                                                         
 
-VERSION      = "14.5"
+VERSION      = "14.6"
 __author__   = "Sree Danush S (L4ZZ3RJ0D)"
 __license__  = "GPLv3"
 __credits__  = ["L4ZZ3RJ0D"]
@@ -384,21 +384,55 @@ class Emit:
         tail = maxlen - head - 1
         return url[:head] + "…" + url[-tail:]
 
+    @staticmethod
+    def _human_size(n: int) -> str:
+        if n <= 0:
+            return "0B"
+        if n < 1024:
+            return f"{n}B"
+        if n < 1024 * 1024:
+            return f"{n/1024:.1f}KB"
+        return f"{n/(1024*1024):.1f}MB"
+
+    @staticmethod
+    def _status_color(status: int) -> str:
+        # httpx-style status coloring by class, so a status code is readable
+        # at a glance instead of buried in the same gray as everything else.
+        if not status:
+            return C.GR
+        if 200 <= status < 300:
+            return C.G
+        if 300 <= status < 400:
+            return C.CY
+        if status in (401, 403):
+            return C.R
+        if 400 <= status < 500:
+            return C.Y
+        if status >= 500:
+            return C.MG
+        return C.GR
+
     def crawl_feed(self, ftype: str, method: str = "GET", url: str = "", status: int = 0, size_bytes: int = 0, extra: List[str] = None):
 
 
         disp_url = self.trunc_url(url)
+        # Status code + content length, HTTPX's `-sc -cl` equivalent — shown
+        # automatically on every crawled URL so there's no need to re-run a
+        # separate tool just to see what each URL actually returned.
+        meta = ""
+        if ftype != "Found" and status:
+            meta = f"[{status}] [{self._human_size(size_bytes)}] "
 
         if self._nc:
             if ftype == "Found":
                 print(f"  ↳  {disp_url}")
             else:
-                print(f"  {ftype}  {disp_url}")
+                print(f"  {ftype}  {meta}{disp_url}")
             if extra:
                 for ex in extra: print(f"       {ex}")
             return
 
-                     
+
         if ftype == "Found":
             tcol = C.G;  label = f"{tcol}↳{C.RST}"
         elif ftype == "JS":
@@ -407,19 +441,18 @@ class Emit:
             tcol = C.CY; label = f"{tcol}[ ↓  ]{C.RST}"
 
         if ftype == "Found":
-                                                              
+
             self._w(f"  {label} {C.W}{disp_url}{C.RST}")
         else:
-                                                                        
-            if status == 200:
-                dot = f"{C.G}●{C.RST}"
-            elif status in (401, 403):
-                dot = f"{C.R}●{C.RST}"
-            elif status and status >= 400:
-                dot = f"{C.Y}●{C.RST}"
-            else:
-                dot = f"{C.GR}●{C.RST}"
-            self._w(f"  {label} {dot} {C.W}{disp_url}{C.RST}")
+
+            scol = self._status_color(status)
+            dot = f"{scol}●{C.RST}"
+            # Content length in a visible color (not gray) too — scaled
+            # from dim white to bright white/yellow by size so a large
+            # unexpected response still catches the eye.
+            cl_col = C.W if size_bytes < 100_000 else (C.Y if size_bytes < 1_000_000 else C.O)
+            meta_c = f"{scol}[{status}]{C.RST} {cl_col}[{self._human_size(size_bytes)}]{C.RST} " if status else ""
+            self._w(f"  {label} {dot} {meta_c}{C.W}{disp_url}{C.RST}")
 
         if extra:
             for ex in extra:
@@ -561,17 +594,25 @@ class Emit:
         }.get(conf, C.GR)
 
                                                             
-        obs     = ep.get("observed_status", [])
-        status_hint = ""
+        # Status code + content length, shown here too (not just the live
+        # feed) — this table is what people actually read in the final
+        # report, so it needs the same information, not just a 404/non-200
+        # hint that previously stayed blank for the (most common) 200 case.
+        obs = ep.get("observed_status", [])
+        cl  = ep.get("content_length")
+        disp_status = 404 if is_404 else (obs[0] if obs else 0)
         if is_404:
-            status_hint = f" [404]"
-        elif obs and obs != [200]:
-                                                                                
+            status_hint = " [404]"
+        elif obs:
             status_hint = f" [{','.join(str(s) for s in obs[:3])}]"
+        else:
+            status_hint = ""
+        if cl is not None:
+            status_hint += f" [{self._human_size(cl)}]"
 
         conf_display = "NOT FOUND" if is_404 else conf
 
-                                                                         
+
         if self._nc:
             print(f"    {method:<7}  {conf_display:<12}  {_strip(auth)}{_strip(sens)}{_strip(snap)}  {url}{status_hint}")
             ctf_hl = ep.get("ctf_highlights", [])
@@ -579,7 +620,17 @@ class Emit:
                 print(f"       └─ [CTF] {h}")
         else:
             url_col = C.GR if is_404 else C.W
-            print(f"  {mc}{method:<7}{C.RST} {cc}{conf_display:<12}{C.RST} {auth}{sens}{snap} {url_col}{url}{C.RST}{C.GR}{status_hint}{C.RST}")
+            # httpx-style status coloring by class instead of flat gray, so
+            # the status code/size actually stand out at a glance.
+            scol = self._status_color(disp_status)
+            status_part = ""
+            if is_404 or obs:
+                codes = "404" if is_404 else ",".join(str(s) for s in obs[:3])
+                status_part = f" {scol}[{codes}]{C.RST}"
+            if cl is not None:
+                cl_col = C.W if cl < 100_000 else (C.Y if cl < 1_000_000 else C.O)
+                status_part += f" {cl_col}[{self._human_size(cl)}]{C.RST}"
+            print(f"  {mc}{method:<7}{C.RST} {cc}{conf_display:<12}{C.RST} {auth}{sens}{snap} {url_col}{url}{C.RST}{status_part}")
             ctf_hl = ep.get("ctf_highlights", [])
             for h in ctf_hl:
                 print(f"      {C.R}└─{C.RST} {C.Y}[CTF] {h}{C.RST}")
@@ -1246,6 +1297,12 @@ def print_results(intel: dict, target: str, elapsed: float,
 
     if interesting:
         emit.section(f"PARAMETER MAP  ({len(interesting)} endpoints)", orbital=True)
+        # Collect everything first, then group endpoints that share the same
+        # method + exact parameter-name set (e.g. every "username, email,
+        # password" register-style form) instead of printing one identical
+        # params line per URL — the common case on any site with several
+        # register/login/reset-password-style endpoints.
+        _rows: list = []
         for ep in interesting:
             url    = ep.get("url","")
                                                                                      
@@ -1332,13 +1389,41 @@ def print_results(intel: dict, target: str, elapsed: float,
                 return result
 
             tagged_params = _collapse_numbered(tagged_params)
+            _rows.append({"method": method, "mc": mc, "disp": disp, "params": tagged_params})
 
+        # Group by (method, exact param-name set) — order-independent, so
+        # "email, password" and "password, email" still collapse together.
+        _groups: dict = {}
+        _group_order: list = []
+        for row in _rows:
+            key = (row["method"], tuple(sorted(row["params"])))
+            if key not in _groups:
+                _groups[key] = {"mc": row["mc"], "params": row["params"], "urls": []}
+                _group_order.append(key)
+            _groups[key]["urls"].append(row["disp"])
+
+        for key in _group_order:
+            method = key[0]
+            g = _groups[key]
+            urls = g["urls"]
+            tagged_params = g["params"]
+            mc = g["mc"]
             if nc:
-                print(f"    {method:<7} {disp}")
+                if len(urls) == 1:
+                    print(f"    {method:<7} {urls[0]}")
+                else:
+                    print(f"    {method:<7} ({len(urls)} endpoints with identical params)")
+                    for u in urls:
+                        print(f"      - {u}")
                 print(f"      params: {', '.join(tagged_params)}")
             else:
-                                                                           
-                print(f"  {mc}●{C.RST} {C.W}{method:<7}{C.RST} {C.B}{C.W}{disp}{C.RST}")
+                if len(urls) == 1:
+                    print(f"  {mc}●{C.RST} {C.W}{method:<7}{C.RST} {C.B}{C.W}{urls[0]}{C.RST}")
+                else:
+                    print(f"  {mc}●{C.RST} {C.W}{method:<7}{C.RST} {C.B}{C.W}"
+                          f"{len(urls)} endpoints with identical params:{C.RST}")
+                    for u in urls:
+                        print(f"      {C.GR}↳{C.RST} {C.W}{u}{C.RST}")
                 param_str = ", ".join(
                     f"{C.GR}{p}{C.RST}" if "[hidden]" in p else
                     f"{C.MG}{p}{C.RST}" if "[file]" in p else
@@ -1858,6 +1943,13 @@ class Config:
                           
                                                                         
 
+# RFC 2616 token chars — a valid cookie name can't contain spaces, colons,
+# quotes, or other separators. Used to reject a malformed --cookie entry
+# (most often someone pasting the whole "Cookie: ..." header line) before it
+# ever reaches aiohttp's cookie jar, which would otherwise crash hard.
+_COOKIE_NAME_RE = re.compile(r"^[!#$%&'*+\-.0-9A-Z^_`a-z|~]+$")
+
+
 class SessionManager:
     @staticmethod
     def parse_cookies(raw) -> Dict[str, str]:
@@ -1869,10 +1961,15 @@ class SessionManager:
                                           "x-csrf-token","x-access-token")}
         if isinstance(raw, str):
             raw = raw.strip()
-                                                                             
-                                                                             
-                                                                          
-                                                                              
+            # Users commonly paste the whole "Cookie: ..." header line copied
+            # straight out of devtools/Burp instead of just its value — strip
+            # that leading header-name prefix if present, so it doesn't get
+            # parsed as part of the first cookie's name.
+            _m = re.match(r'^cookie\s*:\s*', raw, re.I)
+            if _m:
+                raw = raw[_m.end():]
+
+
             _looks_like_path = (
                 len(raw) <= 255
                 and " " not in raw
@@ -1889,13 +1986,29 @@ class SessionManager:
                                                                          
                                                   
             out: Dict[str, str] = {}
+            skipped: List[str] = []
             for part in raw.split(";"):
                 part = part.strip()
                 if "=" in part:
                     k, _, v = part.partition("=")
                     k = k.strip(); v = v.strip()
-                    if k:
-                        out[k] = v
+                    if not k:
+                        continue
+                    # A cookie name is an RFC 2616 token — no spaces, colons,
+                    # quotes, etc. A key that fails this almost always means
+                    # a header-name prefix (or something else) leaked into
+                    # the name; keeping it would crash the whole scan deep
+                    # inside aiohttp's cookie jar ("Illegal key ...") instead
+                    # of here, where it's clear what went wrong.
+                    if not _COOKIE_NAME_RE.match(k):
+                        skipped.append(k)
+                        continue
+                    out[k] = v
+            if skipped:
+                print(f"[!] Ignoring malformed cookie name(s) from --cookie: "
+                      f"{', '.join(repr(s) for s in skipped)} — pass just "
+                      f"\"name=value; name2=value2\", not the full 'Cookie: ...' "
+                      f"header line.", file=sys.stderr)
             return out
         return {}
 
@@ -2580,6 +2693,7 @@ class Store:
             "source": [], "confidence": 0, "confidence_label": "LOW",
             "auth_required": False, "parameter_sensitive": False,
             "observed_status": [], "baseline": None,
+            "content_length": None,
                                                                                
                                                                      
                                                                                        
@@ -2895,6 +3009,14 @@ class Store:
                     ep["confidence"]       = Conf.MEDIUM
                     ep["confidence_label"] = Conf.label(ep["confidence"])
 
+    def record_content_length(self, url, method, size_bytes):
+        # Response size for whatever last fetched this URL — stored per
+        # endpoint so every output format (JSON/JSONL/CSV/urls/console) can
+        # show it automatically, the way httpx would need -cl to do.
+        key = self._key(url, method)
+        if key in self.endpoints:
+            self.endpoints[key]["content_length"] = size_bytes
+
     def mark_sensitive(self, url, method):
         key = self._key(url, method)
         if key in self.endpoints:
@@ -3181,6 +3303,7 @@ class Store:
                 "confidence": cl,
                 "confidence_score": c,
                 "observed_status": e["observed_status"],
+                "content_length": e.get("content_length"),
                 "params": sorted(all_params),
                 "params_detail": e["params"],
                 "headers_detail": e.get("headers_detail", {"vary": [], "cookies": []}),
@@ -7309,6 +7432,7 @@ async def probe_admin_panels(session, base: str, store, emit, rl):
             if ep:
                 ep["admin_panel"] = True
                 ep["observed_status"].append(s)
+                ep["content_length"] = len(body or "")
             emit.warn_sev(f"[AdminProbe] Admin redirect ({s}) → {loc or url}", "MEDIUM")
             found += 1
             return
@@ -7323,6 +7447,7 @@ async def probe_admin_panels(session, base: str, store, emit, rl):
                 ep["admin_panel"] = True
                 ep["auth_required"] = True
                 ep["observed_status"].append(s)
+                ep["content_length"] = len(body)
             emit.warn_sev(f"[AdminProbe] Auth-protected admin ({s}) → {url}", "HIGH")
             found += 1
             return
@@ -7335,6 +7460,7 @@ async def probe_admin_panels(session, base: str, store, emit, rl):
         if ep:
             ep["admin_panel"] = True
             ep["observed_status"].append(s)
+            ep["content_length"] = len(body)
         emit.warn_sev(f"[AdminProbe] ADMIN PANEL ({s}) → {url}  [{title[:60]}]", "HIGH")
         found += 1
 
@@ -8922,9 +9048,18 @@ class Spider:
         
         if s is None or body is None:
             return
-        
-                             
+
+
+        # Make sure this URL has an endpoint record BEFORE recording its
+        # status/content-length — later code (link/form extraction) also
+        # calls add_endpoint for it, but only conditionally and further
+        # down, which used to mean record_status/record_content_length ran
+        # on a URL the store didn't know about yet and silently became a
+        # no-op. add_endpoint is idempotent (merges into the same entry
+        # either way), so calling it here first is always safe.
+        self.store.add_endpoint(url, method='GET', source='Crawl', score=Conf.LOW)
         self.store.record_status(url, 'GET', s)
+        self.store.record_content_length(url, 'GET', len(body))
 
         # ── Redirect Location tracking ──────────────────────────────────────
         # When the server issues a 3xx redirect, the Location header tells us
